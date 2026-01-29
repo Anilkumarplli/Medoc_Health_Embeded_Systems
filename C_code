@@ -1,0 +1,127 @@
+#include <stdint.h>
+#include <stdbool.h>
+
+
+typedef enum
+{
+    STATE_IDLE,
+    STATE_LISTENING,
+    STATE_ERROR
+} DeviceState;
+
+
+#define LED_OFF   0
+#define LED_GREEN 1
+#define LED_RED   2
+
+static uint32_t button_hold_start_time = 0;
+static const uint32_t MAX_HOLD_TIME_MS = 30000; // 30 seconds
+
+
+bool     is_button_pressed(void);
+int      get_battery_level(void);
+void     set_led_color(int color);
+void     start_audio_stream(void);
+void     stop_audio_stream(void);
+uint32_t get_system_time_ms(void); 
+
+
+DeviceState current_state = STATE_IDLE;
+
+void device_state_machine(void)
+{
+    int      battery        = get_battery_level();
+    bool     button_pressed = is_button_pressed();
+    uint32_t current_time   = get_system_time_ms();
+
+    switch (current_state)
+    {
+        case STATE_IDLE:
+            
+            set_led_color(LED_OFF);
+            stop_audio_stream();
+            button_hold_start_time = 0;
+
+            
+            if (button_pressed)
+            {
+                if (battery > 10)
+                {
+                    /* Battery sufficient - enter LISTENING state */
+                    current_state = STATE_LISTENING;
+                    button_hold_start_time = current_time;
+                }
+                else
+                {
+                    /* Battery too low - enter ERROR state */
+                    current_state = STATE_ERROR;
+                }
+            }
+            break;
+
+        case STATE_LISTENING:
+            /* LISTENING State: LED GREEN, Audio streaming active */
+            set_led_color(LED_GREEN);
+            start_audio_stream();
+
+            /* Safety check: Battery level must stay above 10% */
+            if (battery < 10)
+            {
+                current_state = STATE_ERROR;
+                break;
+            }
+
+            /* Safety check: Prevent overheating from stuck button */
+            if (button_pressed)
+            {
+                uint32_t hold_duration = current_time - button_hold_start_time;
+
+                if (hold_duration > MAX_HOLD_TIME_MS)
+                {
+                    /* Force reset to IDLE after 30 seconds */
+                    stop_audio_stream();
+                    set_led_color(LED_OFF);
+                    current_state = STATE_IDLE;
+                    button_hold_start_time = 0;
+                    break;
+                }
+            }
+
+            /* Hold-to-talk: Return to IDLE when button released */
+            if (!button_pressed)
+            {
+                stop_audio_stream();
+                set_led_color(LED_OFF);
+                current_state = STATE_IDLE;
+                button_hold_start_time = 0;
+            }
+            break;
+
+        case STATE_ERROR:
+            /* ERROR State: LED RED, Audio OFF, waiting for recovery */
+            set_led_color(LED_RED);
+            stop_audio_stream();
+
+            /* Recovery: Return to IDLE when battery recharged AND button released */
+            if (battery > 15 && !button_pressed)
+            {
+                current_state = STATE_IDLE;
+            }
+            break;
+
+        default:
+            /* Invalid state - reset to IDLE for safety */
+            current_state = STATE_IDLE;
+            break;
+    }
+}
+
+int main(void)
+{
+    while (1)
+    {
+        device_state_machine();
+    }
+
+    return 0;
+}
